@@ -7,6 +7,7 @@ This repository runs a complete self-hosted Vikunja stack with:
 - Redis (cache/rate-limit store)
 - Cloudflare Tunnel (remote HTTPS ingress)
 - Prometheus (metrics scraping)
+- Loki + Promtail (log aggregation and shipping)
 - Grafana (metrics dashboards)
 - Automated DB dumps
 - Automated GitHub backup of DB dumps + uploaded files
@@ -18,6 +19,8 @@ This repository runs a complete self-hosted Vikunja stack with:
 | Vikunja | `vikunja` | `3456` | Main app/API |
 | Grafana | `vikunja-grafana` | `3000` | Metrics UI |
 | Prometheus | `vikunja-prometheus` | `9090` | Metrics collection |
+| Loki | `vikunja-loki` | internal | Log store |
+| Promtail | `vikunja-promtail` | internal | Docker log shipper |
 | ParadeDB/Postgres | `vikunja-db` | internal | Primary DB |
 | Redis | `vikunja-redis` | internal | Cache/rate-limit store |
 | Cloudflared | `vikunja-tunnel` | n/a | Cloudflare tunnel agent |
@@ -104,6 +107,8 @@ Expected long-running containers:
 - `vikunja-redis`
 - `vikunja-tunnel`
 - `vikunja-prometheus`
+- `vikunja-loki`
+- `vikunja-promtail`
 - `vikunja-grafana`
 - `vikunja-db-backup`
 - `vikunja-git-backup`
@@ -154,6 +159,22 @@ docker compose logs --tail=100 redis
 1. Open `http://localhost:3000`
 2. Login with `GRAFANA_USER` / `GRAFANA_PASSWORD`
 3. Confirm Prometheus datasource is present (auto-provisioned from [`grafana/provisioning/datasources/prometheus.yml`](./grafana/provisioning/datasources/prometheus.yml))
+4. Confirm Loki datasource is present (auto-provisioned from [`grafana/provisioning/datasources/loki.yml`](./grafana/provisioning/datasources/loki.yml))
+5. Open the `Vikunja / Vikunja Logs` dashboard (auto-provisioned from [`grafana/provisioning/dashboards/json/vikunja-logs.json`](./grafana/provisioning/dashboards/json/vikunja-logs.json))
+
+### Loki + Promtail
+
+```bash
+docker compose logs --tail=100 loki
+docker compose logs --tail=100 promtail
+```
+
+Promtail labels each log stream with:
+
+- `compose_project`
+- `compose_service`
+- `container`
+- `image`
 
 ### Cloudflare tunnel
 
@@ -194,7 +215,7 @@ docker compose up -d
 Tail logs:
 
 ```bash
-docker compose logs -f vikunja db redis prometheus grafana cloudflared db-backup git-backup
+docker compose logs -f vikunja db redis prometheus loki promtail grafana cloudflared db-backup git-backup
 ```
 
 Re-run init permissions step if file ownership breaks:
@@ -249,6 +270,9 @@ docker compose start vikunja
 - `db/`: PostgreSQL data directory (persistent)
 - `files/`: Vikunja file uploads
 - `plugins/`: Vikunja plugins directory
+- [`loki/config.yml`](./loki/config.yml): Loki backend config
+- [`promtail/config.yml`](./promtail/config.yml): Promtail scrape/label rules
+- [`grafana/provisioning/datasources/loki.yml`](./grafana/provisioning/datasources/loki.yml): Loki datasource provisioning
 - `backups/db/`: scheduled DB dumps
 - `git-backup-repo/`: local git mirror for pushed backups
 - [`scripts/git-backup.sh`](./scripts/git-backup.sh): git backup job logic
@@ -259,10 +283,12 @@ docker compose start vikunja
   - `CLOUDFLARE_TUNNEL_TOKEN` is missing/invalid.
 - Prometheus shows Vikunja target `DOWN`:
   - `METRICS_USERNAME`/`METRICS_PASSWORD` mismatch between Vikunja and generated Prometheus config.
+- No logs in Grafana Loki queries:
+  - check `promtail` is running and can read `/var/lib/docker/containers`.
+  - check Loki datasource health in Grafana.
 - Email reminders fail:
   - SMTP vars are wrong, or provider blocks auth/TLS settings.
 - Backups are not pushing:
   - `GITHUB_BACKUP_TOKEN` lacks repo write scope, or `GITHUB_BACKUP_REPO` is wrong.
 - Permission errors on `files/` or `plugins/`:
   - run `docker compose run --rm init`.
-
