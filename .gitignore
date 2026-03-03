@@ -1,0 +1,19 @@
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Local runtime/data directories
+backups/
+db/
+files/
+git-backup-repo/
+
+# Backup artifacts
+*.sql
+*.sql.gz
+
+# Logs and OS files
+*.log
+.DS_Store

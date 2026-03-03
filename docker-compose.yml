@@ -1,0 +1,257 @@
+services:
+  # ── Init ──────────────────────
+  init:
+    image: alpine:latest
+    container_name: vikunja-init
+    restart: "no"
+    volumes:
+      - ./files:/data/files
+      - ./plugins:/data/plugins
+      - ./db:/data/db
+      - ./backups/db:/data/backups/db
+      - ./git-backup-repo:/data/git-backup-repo
+      - ./scripts:/data/scripts
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        chown -R 1000:1000 /data/files /data/plugins &&
+        echo 'Init complete'
+      "
+  
+  prom-init:
+    image: alpine:latest
+    container_name: vikunja-prom-init
+    restart: "no"
+    environment:
+      METRICS_USERNAME: ${METRICS_USERNAME:-admin}
+      METRICS_PASSWORD: ${METRICS_PASSWORD}
+    volumes:
+      - prom-config:/etc/prometheus
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        cat > /etc/prometheus/prometheus.yml <<EOF
+        global:
+          scrape_interval: 15s
+          evaluation_interval: 15s
+
+        scrape_configs:
+          - job_name: "vikunja"
+            metrics_path: /api/v1/metrics
+            basic_auth:
+              username: "$${METRICS_USERNAME}"
+              password: "$${METRICS_PASSWORD}"
+            static_configs:
+              - targets: ["vikunja:3456"]
+                labels:
+                  instance: "vikunja-local"
+
+          - job_name: "prometheus"
+            static_configs:
+              - targets: ["localhost:9090"]
+        EOF
+        echo "Prometheus config generated"
+
+  # ── Vikunja (single binary: API + Frontend) ──────────────────────
+  vikunja:
+    image: vikunja/vikunja:latest
+    container_name: vikunja
+    ports:
+      - "3456:3456"
+    environment:
+      VIKUNJA_SERVICE_PUBLICURL: https://${VIKUNJA_DOMAIN}
+      VIKUNJA_SERVICE_JWTSECRET: ${JWT_SECRET}
+      VIKUNJA_SERVICE_TIMEZONE: ${TIMEZONE:-America/New_York}
+      # Set to "false" after creating your first account
+      VIKUNJA_SERVICE_ENABLEREGISTRATION: "true"
+      VIKUNJA_SERVICE_ENABLECALDAV: "true"
+      VIKUNJA_SERVICE_ENABLETASKATTACHMENTS: "true"
+      VIKUNJA_SERVICE_ENABLETASKCOMMENTS: "true"
+      VIKUNJA_SERVICE_ENABLETOTP: "true"
+      VIKUNJA_SERVICE_ENABLEEMAILREMINDERS: "true"
+      # Database (ParadeDB/PostgreSQL)
+      VIKUNJA_DATABASE_TYPE: postgres
+      VIKUNJA_DATABASE_HOST: db
+      VIKUNJA_DATABASE_USER: ${DB_USER:-vikunja}
+      VIKUNJA_DATABASE_PASSWORD: ${DB_PASSWORD}
+      VIKUNJA_DATABASE_DATABASE: ${DB_NAME:-vikunja}
+      # Redis cache
+      VIKUNJA_CACHE_ENABLED: "1"
+      VIKUNJA_CACHE_TYPE: redis
+      VIKUNJA_REDIS_ENABLED: "1"
+      VIKUNJA_REDIS_HOST: redis:6379
+      # Plugins (experimental)
+      VIKUNJA_PLUGINS_ENABLED: "true"
+      VIKUNJA_PLUGINS_DIR: /app/vikunja/plugins
+      # CORS (enable if using desktop app or external clients)
+      VIKUNJA_CORS_ENABLE: "true"
+      # Mailer (optional — uncomment and configure for email reminders)
+      VIKUNJA_MAILER_ENABLED: "true"
+      VIKUNJA_MAILER_HOST: ${SMTP_HOST}
+      VIKUNJA_MAILER_PORT: ${SMTP_PORT}
+      VIKUNJA_MAILER_USERNAME: ${SMTP_USER}
+      VIKUNJA_MAILER_PASSWORD: ${SMTP_PASSWORD}
+      VIKUNJA_MAILER_FROMEMAIL: ${SMTP_FROM}
+
+      VIKUNJA_BACKGROUNDS_PROVIDERS_UNSPLASH_ACCESSTOKEN: ${UNSPLASH_ACCESS_TOKEN:-}
+      VIKUNJA_BACKGROUNDS_PROVIDERS_UNSPLASH_APPLICATIONID: ${UNSPLASH_APP_ID:-}
+      # Metrics
+      VIKUNJA_METRICS_USERNAME: ${METRICS_USERNAME:-admin}
+      VIKUNJA_METRICS_PASSWORD: ${METRICS_PASSWORD}
+    volumes:
+      - ./config.yml:/etc/vikunja/config.yml:ro
+      - ./files:/app/vikunja/files
+      - ./plugins:/app/vikunja/plugins
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - vikunja-net
+
+  # ── ParadeDB (PostgreSQL + pg_search for full-text search) ───────
+  db:
+    image: paradedb/paradedb:latest
+    container_name: vikunja-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-vikunja}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-vikunja}
+    volumes:
+      - ./db:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U $$POSTGRES_USER"]
+      interval: 2s
+      start_period: 30s
+    networks:
+      - vikunja-net
+
+  # ── Redis (caching layer) ───────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: vikunja-redis
+    restart: unless-stopped
+    networks:
+      - vikunja-net
+
+  # ── Cloudflare Tunnel (secure remote access) ────────────────────
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: vikunja-tunnel
+    restart: unless-stopped
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate run
+    depends_on:
+      - vikunja
+    networks:
+      - vikunja-net
+  
+    # ── Prometheus (metrics collection) ──────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: vikunja-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - prom-config:/etc/prometheus:ro
+      - prom-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=90d"
+    depends_on:
+      prom-init:
+        condition: service_completed_successfully
+      vikunja:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - vikunja-net
+
+  # ── Grafana (metrics dashboard) ─────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: vikunja-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:-grafana.dengelmann.dev}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - vikunja-net
+
+  # ── Database Backup (scheduled PostgreSQL dumps) ─────────────────
+  db-backup:
+    image: tiredofit/db-backup:latest
+    container_name: vikunja-db-backup
+    volumes:
+      - ./backups/db:/backup
+    environment:
+      TIMEZONE: ${TIMEZONE:-America/New_York}
+      CONTAINER_ENABLE_MONITORING: "FALSE"
+      DEFAULT_BACKUP_BEGIN: "0300"
+      DEFAULT_BACKUP_INTERVAL: "1440"
+      DEFAULT_CLEANUP_TIME: "10080"
+      DEFAULT_COMPRESSION: GZ
+      DEFAULT_CHECKSUM: SHA1
+      DB01_TYPE: postgres
+      DB01_HOST: db
+      DB01_NAME: ${DB_NAME:-vikunja}
+      DB01_USER: ${DB_USER:-vikunja}
+      DB01_PASS: ${DB_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - vikunja-net
+
+  # ── Git Backup Pusher (commits + pushes to private GitHub repo) ──
+  git-backup:
+    image: alpine/git:latest
+    container_name: vikunja-git-backup
+    volumes:
+      - ./backups:/backups:ro
+      - ./files:/vikunja-files:ro
+      - ./git-backup-repo:/repo
+      - ./scripts/git-backup.sh:/scripts/git-backup.sh:ro
+    environment:
+      GIT_AUTHOR_NAME: ${GIT_BACKUP_NAME:-David Engelmann}
+      GIT_AUTHOR_EMAIL: ${GIT_BACKUP_EMAIL:-david.engelmann44@gmail.com}
+      GIT_COMMITTER_NAME: ${GIT_BACKUP_NAME:-David Engelmann}
+      GIT_COMMITTER_EMAIL: ${GIT_BACKUP_EMAIL:-david.engelmann44@gmail.com}
+      GITHUB_TOKEN: ${GITHUB_BACKUP_TOKEN}
+      GITHUB_REPO: ${GITHUB_BACKUP_REPO}
+    entrypoint: /bin/sh
+    command: >
+      -c "
+        apk add --no-cache rsync bash &&
+        echo '30 3 * * * /bin/bash /scripts/git-backup.sh >> /var/log/backup.log 2>&1' | crontab - &&
+        crond -f -l 2
+      "
+    restart: unless-stopped
+
+networks:
+  vikunja-net:
+    driver: bridge
+
+volumes:
+  prom-config:
+  prom-data:
+  grafana-data:

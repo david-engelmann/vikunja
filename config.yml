@@ -1,0 +1,122 @@
+##############################################
+# Vikunja Configuration
+# All settings defined in code
+# Secrets/credentials live in .env only
+# Docs: https://vikunja.io/docs/config-options/
+##############################################
+
+service:
+  # JWT token durations
+  jwtttl: 259200          # 3 days for normal tokens
+  jwtttllong: 2592000     # 30 days for "remember me"
+  jwtttlshort: 600        # 10 min for short-lived refresh tokens
+
+  timezone: "America/New_York"
+
+  # Bump this if you're doing heavy API work or plugin dev
+  maxitemsperpage: 100
+
+  # Core features — all on
+  enablecaldav: true
+  enablelinksharing: true
+  enabletaskattachments: true
+  enabletaskcomments: true
+  enabletotp: true
+  enableemailreminders: true
+  enableuserdeletion: true
+  enablepublicteams: false
+
+  # >>> Set to false after creating your account <<<
+  enableregistration: true
+
+  maxavatarsize: 1024
+  allowiconchanges: true
+  bcryptrounds: 11
+
+database:
+  # Connection pool tuning for PostgreSQL
+  maxopenconnections: 100
+  maxidleconnections: 50
+  maxconnectionlifetime: 10000
+  sslmode: disable
+
+cors:
+  enable: true
+  origins:
+    - "http://127.0.0.1:*"
+    - "http://localhost:*"
+    - "https://vikunja.dengelmann.dev"
+  maxage: 3600
+
+mailer:
+  authtype: plain
+  skiptlsverify: false
+  forcessl: true
+  queuelength: 100
+  queuetimeout: 30
+
+log:
+  enabled: true
+  standard: stdout
+  level: INFO
+  format: text
+  database: "off"
+  databaselevel: WARNING
+  http: stdout
+  # Enable events logging — critical for debugging webhooks and plugin behavior
+  events: stdout
+  eventslevel: info
+  # Enable mail logging so you can verify Resend delivery
+  mail: stdout
+  maillevel: info
+
+ratelimit:
+  enabled: true
+  kind: user
+  period: 60
+  limit: 200             # Higher limit for power usage + API/webhook traffic
+  store: redis            # Use Redis directly — survives restarts, shared state
+  noauthlimit: 10
+
+files:
+  basepath: ./files
+  maxsize: "250MB"        # Large enough for video attachments
+  type: local
+
+avatar:
+  gravatarexpiration: 3600
+
+backgrounds:
+  enabled: true
+  providers:
+    upload:
+      enabled: true
+    unsplash:
+      enabled: true
+      accesstoken: ""     # Set via VIKUNJA_BACKGROUNDS_PROVIDERS_UNSPLASH_ACCESSTOKEN env var
+      applicationid: ""   # Set via VIKUNJA_BACKGROUNDS_PROVIDERS_UNSPLASH_APPLICATIONID env var
+
+keyvalue:
+  type: redis
+
+auth:
+  local:
+    enabled: true
+  openid:
+    enabled: false
+
+defaultsettings:
+  language: "en"
+  default_project_view: "list"
+  week_start: 0
+  overdue_tasks_reminders_time: "09:00"
+  overdue_tasks_reminders_enabled: true
+
+metrics:
+  enabled: true
+  username: ""            # Set via VIKUNJA_METRICS_USERNAME env var
+  password: ""            # Set via VIKUNJA_METRICS_PASSWORD env var
+
+sentry:
+  enabled: false
+  frontendenabled: false
