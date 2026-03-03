@@ -13,9 +13,19 @@ scrape_configs:
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
+        # Hard filter at Docker API level so we only discover this compose project.
+        filters:
+          - name: label
+            values:
+              - com.docker.compose.project=vikunja
     pipeline_stages:
       - docker: {}
     relabel_configs:
+      # Safety filter: only keep known services from this stack.
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        regex: (vikunja|db|redis|cloudflared|prometheus|grafana|db-backup|git-backup|loki|promtail|init|prom-init)
+        action: keep
+
       - source_labels: [__meta_docker_container_label_com_docker_compose_project]
         regex: vikunja
         action: keep
